@@ -1,0 +1,14 @@
+- name: "OpenAI 官方"
+  api_key: "sk-xxxxxx"
+  base_url: "https://api.openai.com/v1"
+  models: ["gpt-3.5-turbo", "gpt-4"]
+
+- name: "DeepSeek"
+  api_key: "sk-xxxxxx"
+  base_url: "https://api.deepseek.com"
+  models: ["deepseek-chat", "deepseek-coder"]
+
+- name: "本地中转"
+  api_key: "any-key"
+  base_url: "http://localhost:11434/v1"
+  models: ["qwen:7b", "llama3"]
