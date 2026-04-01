@@ -31,29 +31,32 @@ class LLMTesterApp:
         top_frame = ttk.Frame(self.root, padding="10")
         top_frame.pack(fill=tk.X)
 
-        self.btn_load = ttk.Button(top_frame, text="加载 YAML 配置", command=self.load_config)
+        self.btn_load = ttk.Button(top_frame, text="加载 YAML 配置", width=15, command=self.load_config)
         self.btn_load.pack(side=tk.LEFT, padx=5)
 
-        ttk.Label(top_frame, text="超时(秒):").pack(side=tk.LEFT, padx=(15, 2))
+        ttk.Label(top_frame, text="超时(秒):").pack(side=tk.LEFT, padx=(10, 2))
         self.timeout_entry = ttk.Entry(top_frame, textvariable=self.timeout_var, width=5)
-        self.timeout_entry.pack(side=tk.LEFT, padx=5)
+        self.timeout_entry.pack(side=tk.LEFT, padx=(5,30))
 
         # 按钮组
         self.btn_run_selected = ttk.Button(top_frame, text="检测选中项", 
-                                          command=lambda: self.start_tests(mode="selected"), state=tk.DISABLED)
-        self.btn_run_selected.pack(side=tk.LEFT, padx=5)
+                                            command=lambda: self.start_tests(mode="selected"), width=10, state=tk.DISABLED)
+        self.btn_run_selected.pack(side=tk.LEFT, padx=3)
 
         self.btn_run_all = ttk.Button(top_frame, text="检测全部", 
-                                     command=lambda: self.start_tests(mode="all"), state=tk.DISABLED)
-        self.btn_run_all.pack(side=tk.LEFT, padx=5)
+                                        command=lambda: self.start_tests(mode="all"), width=10, state=tk.DISABLED)
+        self.btn_run_all.pack(side=tk.LEFT, padx=3)
+
 
         # 【新增】停止检测按钮
         self.btn_stop = ttk.Button(top_frame, text="停止检测", 
-                                  command=self.stop_tests, state=tk.DISABLED)
-        self.btn_stop.pack(side=tk.LEFT, padx=5)
+                                    command=self.stop_tests, width=10, state=tk.DISABLED)
+        self.btn_stop.pack(side=tk.LEFT, padx=(30,5))
 
         self.lbl_status = ttk.Label(top_frame, text="请先加载配置文件")
         self.lbl_status.pack(side=tk.RIGHT, padx=5)
+
+
 
         # 表格区域
         table_container = ttk.Frame(self.root, padding="10")
@@ -72,7 +75,7 @@ class LLMTesterApp:
         self.tree.heading("latency", text="响应时间 (ms)")
         self.tree.heading("message", text="详细信息 (选中3秒后弹出详情)")
 
-        for col, width in zip(columns, [120, 150, 100, 120, 800]):
+        for col, width in zip(columns, [130, 180, 100, 120, 800]):
             self.tree.column(col, width=width, minwidth=80)
         self.tree.column("status", anchor=tk.CENTER)
         self.tree.column("latency", anchor=tk.CENTER)
@@ -107,7 +110,7 @@ class LLMTesterApp:
                 name = item.get("name", "未命名")
                 models = item.get("models", [])
                 for model in models:
-                    row_id = self.tree.insert("", tk.END, values=(name, model, "等待检测", "-", "-"), tags=('waiting',))
+                    row_id = self.tree.insert("", tk.END, values=(name, model, "-", "-", "-"), tags=('waiting',))
                     self.row_map.append({
                         "row_id": row_id,
                         "name": name, "base_url": item.get("base_url"),
@@ -136,6 +139,9 @@ class LLMTesterApp:
             self.stop_pending = True
             self.btn_stop.config(state=tk.DISABLED)
             self.lbl_status.config(text="正在停止，请稍候...")
+            for item in self.tree.get_children():
+                if self.tree.set(item,"status") == "等待检测":
+                    self.tree.set(item,"status","-")
 
     def start_tests(self, mode="all"):
         try:
@@ -170,6 +176,9 @@ class LLMTesterApp:
         # 重置状态
         for task in tasks_to_run:
             self.tree.item(task["row_id"], values=(task["name"], task["model"], "等待检测", "-", "-"), tags=('waiting',))
+        
+        # 清空列表选择项
+        self.tree.selection_set('')
         
         self.lbl_status.config(text=f"正在检测 ({len(tasks_to_run)})...")
 
