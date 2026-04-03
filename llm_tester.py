@@ -48,7 +48,7 @@ class LLMTesterApp:
         self.btn_run_all.pack(side=tk.LEFT, padx=3)
 
 
-        # 【新增】停止检测按钮
+        # 停止检测按钮
         self.btn_stop = ttk.Button(top_frame, text="停止检测", 
                                     command=self.stop_tests, width=10, state=tk.DISABLED)
         self.btn_stop.pack(side=tk.LEFT, padx=(30,5))
@@ -139,9 +139,6 @@ class LLMTesterApp:
             self.stop_pending = True
             self.btn_stop.config(state=tk.DISABLED)
             self.lbl_status.config(text="正在停止，请稍候...")
-            for item in self.tree.get_children():
-                if self.tree.set(item,"status") == "等待检测":
-                    self.tree.set(item,"status","-")
 
     def start_tests(self, mode="all"):
         try:
@@ -183,18 +180,21 @@ class LLMTesterApp:
         self.lbl_status.config(text=f"正在检测 ({len(tasks_to_run)})...")
 
         for task in tasks_to_run:
-            # 【核心检查】如果用户点击了停止，则跳出循环
             if self.stop_pending:
                 break
 
             row_id = task["row_id"]
+            # 检查组件是否存在，防止窗口关闭后报错
+            if not self.tree.exists(row_id): continue
+            
             self.tree.item(row_id, values=(task["name"], task["model"], "⏳ 测试中...", "-", "-"), tags=('testing',))
             self.tree.see(row_id)
             
             status, latency, msg, tag = self.test_api(task["base_url"], task["api_key"], task["model"], self.current_timeout)
             
-            self.tree.item(row_id, values=(task["name"], task["model"], status, latency, msg), tags=(tag,))
-            self.root.update_idletasks()
+            if self.tree.exists(row_id):
+                self.tree.item(row_id, values=(task["name"], task["model"], status, latency, msg), tags=(tag,))
+                self.root.update_idletasks()
 
         self.root.after(0, self.finish_tests)
 
@@ -205,8 +205,6 @@ class LLMTesterApp:
 
         start_time = time.time()
         try:
-            # 注意：requests 的调用本身是阻塞的，它会等待 timeout_val。
-            # 如果要实现瞬间停止，需要更复杂的逻辑，目前这种方式在当前请求结束后立即停止。
             response = requests.post(url, json=payload, headers=headers, timeout=timeout_val)
             latency = int((time.time() - start_time) * 1000)
             if response.status_code == 200:
@@ -222,18 +220,17 @@ class LLMTesterApp:
         self.is_testing = False
         
         # 恢复按钮状态
-        self.btn_run_all.config(state=tk.NORMAL)
-        self.btn_load.config(state=tk.NORMAL)
-        self.timeout_entry.config(state=tk.NORMAL)
-        self.btn_stop.config(state=tk.DISABLED)
-        self.update_run_selected_button_state()
+        if self.root.winfo_exists():
+            self.btn_run_all.config(state=tk.NORMAL)
+            self.btn_load.config(state=tk.NORMAL)
+            self.timeout_entry.config(state=tk.NORMAL)
+            self.btn_stop.config(state=tk.DISABLED)
+            self.update_run_selected_button_state()
 
-        if self.stop_pending:
-            self.lbl_status.config(text="检测已手动停止")
-            messagebox.showwarning("已停止", "检测任务已手动停止")
-        else:
-            self.lbl_status.config(text="检测完成")
-            messagebox.showinfo("完成", "检测任务已全部结束")
+            if self.stop_pending:
+                self.lbl_status.config(text="检测已手动停止")
+            else:
+                self.lbl_status.config(text="检测完成")
         
         self.stop_pending = False
 
@@ -242,7 +239,7 @@ class LLMTesterApp:
         self.update_run_selected_button_state()
         
         selection = self.tree.selection()
-        if not selection or self.is_testing: # 正在检测时暂不触发 tooltip
+        if not selection or self.is_testing:
             return
         
         self.selected_row_id = selection[-1]
