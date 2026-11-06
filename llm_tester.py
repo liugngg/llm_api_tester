@@ -3,22 +3,36 @@ import threading
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import requests
 import yaml
 
 
-def normalize_api_url(base_url, endpoint):
-    """Build an OpenAI-compatible endpoint URL without corrupting path names."""
+API_MODES = ("Chat Completions", "Responses", "Gemini")
+
+
+def normalize_api_url(base_url, endpoint, mode="Chat Completions"):
+    """Build an endpoint URL, preserving proxy paths and explicit API versions."""
     parts = urlsplit(base_url.strip())
     if parts.scheme not in {"http", "https"} or not parts.netloc:
         raise ValueError("base_url 必须是有效的 http 或 https 地址")
     path = parts.path.rstrip("/")
-    if path.endswith("/v1"):
-        path = path[:-3]
-    path = f"{path}/v1/{endpoint.lstrip('/')}"
+    if mode == "Gemini":
+        if not path.endswith(("/v1", "/v1beta", "/v1alpha")):
+            path = f"{path}/v1beta"
+    else:
+        if path.endswith("/v1"):
+            path = path[:-3]
+        path = f"{path}/v1"
+    path = f"{path}/{endpoint.lstrip('/')}"
     return urlunsplit((parts.scheme, parts.netloc, path, parts.query, ""))
+
+
+def api_headers(interface, mode):
+    if mode == "Gemini":
+        return {"x-goog-api-key": interface["api_key"], "Content-Type": "application/json"}
+    return {"Authorization": f"Bearer {interface['api_key']}", "Content-Type": "application/json"}
 
 
 def validate_config(data):
@@ -39,26 +53,69 @@ def validate_config(data):
     return validated
 
 
-def extract_model_ids(payload):
-    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
-        raise ValueError("模型列表响应格式无效：缺少 data 数组")
+def extract_model_ids(payload, mode="Chat Completions"):
+    field = "models" if mode == "Gemini" else "data"
+    if not isinstance(payload, dict) or not isinstance(payload.get(field), list):
+        raise ValueError(f"模型列表响应格式无效：缺少 {field} 数组")
     ids = []
-    for item in payload["data"]:
-        if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"].strip():
-            ids.append(item["id"].strip())
+    for item in payload[field]:
+        if not isinstance(item, dict):
+            continue
+        if mode == "Gemini":
+            methods = item.get("supportedGenerationMethods")
+            if methods is not None and "generateContent" not in methods:
+                continue
+        model = item.get("name" if mode == "Gemini" else "id")
+        if isinstance(model, str) and model.strip():
+            model = model.strip()
+            if mode == "Gemini":
+                model = model.removeprefix("models/")
+            if model:
+                ids.append(model)
     return sorted(set(ids), key=str.casefold)
 
 
+def fetch_model_ids(interface, mode, timeout=30, stop_event=None):
+    url = normalize_api_url(interface["base_url"], "models", mode)
+    headers = api_headers(interface, mode)
+    models = []
+    params = {}
+    seen_tokens = set()
+    while stop_event is None or not stop_event.is_set():
+        response = requests.get(url, headers=headers, params=params, timeout=timeout)
+        response.raise_for_status()
+        payload = response.json()
+        models.extend(extract_model_ids(payload, mode))
+        token = payload.get("nextPageToken") if mode == "Gemini" else None
+        if not token:
+            break
+        if not isinstance(token, str) or token in seen_tokens:
+            raise ValueError("模型列表响应包含无效或重复的 nextPageToken")
+        seen_tokens.add(token)
+        params = {"pageToken": token}
+    return sorted(set(models), key=str.casefold)
+
+
 def test_model_api(interface, model, mode, timeout):
-    endpoint = "chat/completions" if mode == "Chat Completions" else "responses"
-    url = normalize_api_url(interface["base_url"], endpoint)
-    headers = {"Authorization": f"Bearer {interface['api_key']}", "Content-Type": "application/json"}
-    if mode == "Chat Completions":
-        payload = {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 5}
-    else:
-        payload = {"model": model, "input": "hi", "max_output_tokens": 5}
     started = time.perf_counter()
     try:
+        if mode == "Gemini":
+            model_id = quote(model.removeprefix("models/"), safe="")
+            endpoint = f"models/{model_id}:generateContent"
+            payload = {
+                "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+                "generationConfig": {"maxOutputTokens": 5},
+            }
+        elif mode == "Chat Completions":
+            endpoint = "chat/completions"
+            payload = {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 5}
+        elif mode == "Responses":
+            endpoint = "responses"
+            payload = {"model": model, "input": "hi", "max_output_tokens": 5}
+        else:
+            raise ValueError(f"不支持的请求模式：{mode}")
+        url = normalize_api_url(interface["base_url"], endpoint, mode)
+        headers = api_headers(interface, mode)
         response = requests.post(url, json=payload, headers=headers, timeout=timeout)
         elapsed = int((time.perf_counter() - started) * 1000)
         if response.ok:
@@ -155,7 +212,7 @@ class LLMTesterApp:
         ttk.Button(bar, text="加载 YAML", command=self.load_config).pack(side=tk.LEFT, padx=3)
         ttk.Button(bar, text="获取模型", command=self.fetch_models).pack(side=tk.LEFT, padx=3)
         ttk.Label(bar, text="模式:").pack(side=tk.LEFT, padx=(12, 3))
-        mode_combo = ttk.Combobox(bar, textvariable=self.mode_var, values=("Chat Completions", "Responses"), state="readonly", width=18)
+        mode_combo = ttk.Combobox(bar, textvariable=self.mode_var, values=API_MODES, state="readonly", width=18)
         mode_combo.pack(side=tk.LEFT)
         mode_combo.bind("<<ComboboxSelected>>", self.update_row_modes)
         ttk.Label(bar, text="超时(秒):").pack(side=tk.LEFT, padx=(10, 3))
@@ -228,18 +285,18 @@ class LLMTesterApp:
         self.stop_event.clear()
         self.stop_button.config(state=tk.NORMAL)
         self.status.config(text="正在获取模型列表...")
-        threading.Thread(target=self.fetch_worker, args=(indices,), daemon=True).start()
+        mode = self.mode_var.get()
+        threading.Thread(target=self.fetch_worker, args=(indices, mode), daemon=True).start()
 
-    def fetch_worker(self, indices):
+    def fetch_worker(self, indices, mode):
         for index in indices:
             if self.stop_event.is_set():
                 break
             item = self.interfaces[index]
             try:
-                url = normalize_api_url(item["base_url"], "models")
-                response = requests.get(url, headers={"Authorization": f"Bearer {item['api_key']}"}, timeout=30)
-                response.raise_for_status()
-                models = extract_model_ids(response.json())
+                models = fetch_model_ids(item, mode, stop_event=self.stop_event)
+                if self.stop_event.is_set():
+                    break
                 self.events.put(("models", index, models, None))
             except (requests.RequestException, ValueError) as exc:
                 self.events.put(("models", index, [], str(exc)))

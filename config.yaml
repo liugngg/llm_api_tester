@@ -9,3 +9,8 @@
 - name: "本地中转"
   api_key: "any-key"
   base_url: "http://localhost:11434/v1"
+
+# 获取模型和检测时，请先在界面选择 Gemini 模式。
+- name: "Gemini 官方（原生格式）"
+  api_key: "your-gemini-api-key"
+  base_url: "https://generativelanguage.googleapis.com/v1beta"
